@@ -1,4 +1,3 @@
-
 #include <RTClib.h>
 #include <LiquidCrystal_I2C.h>
 #include <HTTPClient.h>
@@ -16,34 +15,31 @@ LiquidCrystal_I2C lcd(0x27, 16, 2); // 16x2 LCD with I2C
 #define LED2 21 
 #define RELAY_PIN 33         // GPIO pin for the relay
 
-int count = 0;               // Tracks the number of valid elements
+int count = 0;
 RTC_DS3231 rtc;
 
-// WiFi Credentials
 #define WIFI_SSID "Weekends"
 #define WIFI_PASS ""
 
-// SD Card
-const int chipSelect = 5;  // CS pin for SD card on ESP32
-
-// API URL
+const int chipSelect = 5;
 #define apiUrl "https://iot.online.ng/api/device5.php"
 
-// Variables
 int Sampling = 0;
 File dataFile;
 bool wasWiFiConnected = false;
 
+bool prevIR1State = HIGH;
+bool prevIR2State = HIGH;
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
-
     Serial.println("System Initialized");
 
     Serial.print("Connecting to WiFi...");
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     unsigned long startAttemptTime = millis();
-    const unsigned long timeout = 30000;
+    const unsigned long timeout = 3000;
 
     while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < timeout) {
         Serial.print(".");
@@ -58,8 +54,8 @@ void setup() {
         wasWiFiConnected = false;
     }
 
-    pinMode(IRIN_SENSOR_PIN, INPUT);
-    pinMode(IROUT_SENSOR_PIN, INPUT);
+    pinMode(IRIN_SENSOR_PIN, INPUT_PULLUP);
+    pinMode(IROUT_SENSOR_PIN, INPUT_PULLUP);
     pinMode(LED1, OUTPUT);
     pinMode(LED2, OUTPUT);
     pinMode(RELAY_PIN, OUTPUT);
@@ -112,7 +108,7 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED) {
         WiFi.begin(WIFI_SSID, WIFI_PASS);
         unsigned long startAttemptTime = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+        while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 1000) {
             delay(500);
         }
     }
@@ -126,73 +122,68 @@ void loop() {
     wasWiFiConnected = isCurrentlyConnected;
 
     DateTime now = rtc.now();
-    int sensorValue = digitalRead(IRIN_SENSOR_PIN);
-    int sensor2Value = digitalRead(IROUT_SENSOR_PIN);
-    String applianceS = "Light OFF";
-
-    Serial.print("IR Sensor 1: ");
-    Serial.print(sensorValue);
-    Serial.print(" | IR Sensor 2: ");
-    Serial.println(sensor2Value);
+    int currIR1 = digitalRead(IRIN_SENSOR_PIN);
+    int currIR2 = digitalRead(IROUT_SENSOR_PIN);
+    String applianceS = (count > 0) ? "Light ON" : "Light OFF";
 
     char dateStr[11], timeStr[9];
     snprintf(dateStr, sizeof(dateStr), "%04d-%02d-%02d", now.year(), now.month(), now.day());
     snprintf(timeStr, sizeof(timeStr), "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
 
-    if (sensorValue == LOW) {
-        Serial.println("Movement detected! From IR1");
-        count++;
-        digitalWrite(LED1, HIGH);
-        Serial.printf("📅 Date: %s | ⏰ Time: %s\n", dateStr, timeStr);
-        Serial.print("Count after increment: ");
-        Serial.println(count);
+    if (currIR1 == LOW && prevIR1State == HIGH) {
+        delay(100); // debounce
+        if (digitalRead(IRIN_SENSOR_PIN) == LOW) {
+            count++;
+            digitalWrite(LED1, HIGH);
+            Serial.println("➡️ Entry Detected!");
+            Serial.printf("📅 Date: %s | ⏰ Time: %s\n", dateStr, timeStr);
+            Serial.print("Count: "); Serial.println(count);
 
-        if (count > 0) digitalWrite(RELAY_PIN, HIGH), applianceS = "Light ON" ;
-        else digitalWrite(RELAY_PIN, LOW), applianceS = "Light OFF";
+            if (count > 0) digitalWrite(RELAY_PIN, HIGH);
+            applianceS = "Light ON";
 
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Entry:");
-        lcd.print(count);
-        delay(2000);
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Total Entry: ");
-        lcd.print(count);
-        delay(2000);
-        lcd.clear();
-    } else if (sensor2Value == LOW) {
-        Serial.println("Movement detected! From IR2");
-        count--;
-        digitalWrite(LED2, HIGH);
-        Serial.printf("📅 Date: %s | ⏰ Time: %s\n", dateStr, timeStr);
-        Serial.print("Count after decrement: ");
-        Serial.println(count);
-
-        if (count > 0) digitalWrite(RELAY_PIN, HIGH);
-        else digitalWrite(RELAY_PIN, LOW);
-
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Exit - 1");
-        delay(2000);
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Total Entry: ");
-        lcd.print(count);
-        delay(2000);
-        lcd.clear();
-    } else {
-        Serial.println("No movement.");
-        digitalWrite(LED1, LOW);
-        digitalWrite(LED2, LOW);
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("Entry: ");
+            lcd.print(count);
+            delay(1000);
+        }
     }
 
-    // Always send or log this new data
+    if (currIR2 == LOW && prevIR2State == HIGH) {
+        delay(100); // debounce
+        if (digitalRead(IROUT_SENSOR_PIN) == LOW) {
+            count--;
+            if (count < 0) count = 0;
+            digitalWrite(LED2, HIGH);
+            Serial.println("⬅️ Exit Detected!");
+            Serial.printf("📅 Date: %s | ⏰ Time: %s\n", dateStr, timeStr);
+            Serial.print("Count: "); Serial.println(count);
+
+            if (count == 0) digitalWrite(RELAY_PIN, LOW);
+            applianceS = (count > 0) ? "Light ON" : "Light OFF";
+
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("Exit: ");
+            lcd.print(count);
+            delay(1000);
+        }
+    }
+
+    if (currIR1 == HIGH) digitalWrite(LED1, LOW);
+    if (currIR2 == HIGH) digitalWrite(LED2, LOW);
+
+    // Send or log data
     sendSensorData(applianceS, count, 0);
 
-    delay(500);
+    delay(100);  // loop pace delay
+
+    // 🟢 FIX: Move state tracking update here to properly register next falling edge
+    prevIR1State = currIR1;
+    prevIR2State = currIR2;
 }
+
 
 void sendSensorData(String appliances, int entryCount, int exitCount) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -208,14 +199,13 @@ void sendSensorData(String appliances, int entryCount, int exitCount) {
         String payload;
         serializeJson(doc, payload);
 
-        Serial.println("[DEBUG] Sending sensor payload: " + payload);
+        Serial.println("[DEBUG] Sending payload: " + payload);
         int httpCode = http.POST(payload);
 
         if (httpCode > 0 && httpCode == 200) {
-            Serial.printf("[DEBUG] Sensor Data HTTP code: %d\n", httpCode);
-            Serial.println("[DEBUG] Response: " + http.getString());
+            Serial.printf("[DEBUG] HTTP %d: %s\n", httpCode, http.getString().c_str());
         } else {
-            Serial.printf("[ERROR] Sensor HTTP failed: %s\n", http.errorToString(httpCode).c_str());
+            Serial.printf("[ERROR] HTTP failed: %s\n", http.errorToString(httpCode).c_str());
             logSensorDataToSD(appliances, entryCount, exitCount);
         }
 
@@ -242,16 +232,16 @@ void logSensorDataToSD(String appliances, int entryCount, int exitCount) {
         dataFile.print(entryCount); dataFile.print("\t");
         dataFile.println(exitCount);
         dataFile.close();
-        Serial.println("[SD] Logged sensor data to SD card.");
+        Serial.println("[SD] Data logged.");
     } else {
-        Serial.println("❌ Failed to open SENSOR_DATA.txt for sensor logging.");
+        Serial.println("❌ SD write failed.");
     }
 }
 
 void sendStoredData() {
     dataFile = SD.open("/SENSOR_DATA.txt", FILE_READ);
     if (!dataFile) {
-        Serial.println("❌ Failed to open SENSOR_DATA.txt for reading.");
+        Serial.println("❌ Failed to open log file.");
         return;
     }
 
@@ -269,17 +259,15 @@ void sendStoredData() {
             continue;
         }
 
-        Serial.println("[SD] Trying to send line: " + line);
+        Serial.println("[SD] Sending: " + line);
         bool success = sendLineToServer(line);
 
         if (!success) {
             remainingLines.push_back(line);
-            Serial.println("[SD] Failed to send, keeping line.");
-        } else {
-            Serial.println("[SD] Line sent successfully.");
+            Serial.println("[SD] Failed to send, keeping.");
         }
 
-        delay(500);
+        delay(300);
     }
     dataFile.close();
 
@@ -289,9 +277,9 @@ void sendStoredData() {
             dataFile.println(l);
         }
         dataFile.close();
-        Serial.println("[SD] SENSOR_DATA.txt updated.");
+        Serial.println("[SD] Log updated.");
     } else {
-        Serial.println("❌ Failed to rewrite SENSOR_DATA.txt.");
+        Serial.println("❌ Failed to write updated log.");
     }
 }
 
@@ -303,7 +291,6 @@ bool sendLineToServer(String line) {
     lcd.print("Data...");
 
     DynamicJsonDocument doc(512);
-
     String parts[6];
     int index = 0;
 
@@ -319,7 +306,7 @@ bool sendLineToServer(String line) {
     }
 
     if (index < 6) {
-        Serial.println("[ERROR] Line parsing error.");
+        Serial.println("[ERROR] Malformed line.");
         return false;
     }
 
@@ -335,15 +322,7 @@ bool sendLineToServer(String line) {
     http.addHeader("Content-Type", "application/json");
 
     int httpCode = http.POST(payload);
-
-    bool success = false;
-    if (httpCode > 0 && httpCode == 200) {
-        Serial.printf("[DEBUG] Sent saved payload. HTTP: %d\n", httpCode);
-        success = true;
-    } else {
-        Serial.printf("[ERROR] Failed to send saved line. HTTP: %s\n", http.errorToString(httpCode).c_str());
-    }
-
     http.end();
-    return success;
+
+    return (httpCode == 200);
 }
